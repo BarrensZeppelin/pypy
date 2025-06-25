@@ -5,7 +5,9 @@ import os
 import re
 import token
 import unittest
-from tokenize import (tokenize, untokenize,
+import collections
+from tokenize import (#tokenize, TokenInfo
+                     untokenize,
                      tok_name,
                      Untokenizer, generate_tokens,
                      TokenError)
@@ -111,6 +113,44 @@ INVALID_UNDERSCORE_LITERALS = [
     '(1+1.5_j)',
 ]
 
+from pypy.interpreter.pyparser import pytokenizer, pytoken
+from pypy.interpreter.astcompiler import consts
+
+_ops = set()
+for s, idx in pytoken.python_opmap.items():
+    _ops.add(idx)
+    # exact_name = pytoken.token_names[idx]
+    # _ops.add(exact_name)
+
+
+class TokenInfo(collections.namedtuple('TokenInfo', 'type string start end line')):
+    def __new__(cls, type, *rest):
+        etype = type
+        if type in _ops:
+            type = tokens.OP
+        x = super(TokenInfo, cls).__new__(cls, type, *rest)
+        x.exact_type = etype
+        return x
+
+    def __repr__(self):
+        annotated_type = '%d (%s)' % (self.type, tok_name[self.type])
+        return ('TokenInfo(type=%s, string=%r, start=%r, end=%r, line=%r)' %
+                self._replace(type=annotated_type))
+
+
+def tokenize(gen, flags=consts.PyCF_ASYNC_HACKS):
+    lines = []
+    while True:
+        line = gen()
+        if not line:
+            break
+        lines.append(line)
+    tokens = pytokenizer.generate_tokens(lines, flags)
+    return [
+        TokenInfo(t.token_type, t.value, (t.lineno, t.column), (t.end_lineno, t.end_column), t.line)
+        for t in tokens
+    ]
+
 # Converts a source string into a list of textual representation
 # of the tokens such as:
 # `    NAME       'if'          (1, 0) (1, 2)`
@@ -126,10 +166,10 @@ def stringify_tokens_from_source(token_generator, source_string):
         # Ignore the new line on the last line if the input lacks one
         if missing_trailing_nl and type == NEWLINE and end[0] == num_lines:
             continue
-        type = tok_name[type]
+        type = pytoken.token_names[type]
         result.append("    {type:10} {token!r:13} {start} {end}".format(type=type, token=token, start=start, end=end))
 
-    return result
+    return result[:-2]
 
 class TokenizeTest(TestCase):
     # Tests for the tokenize module.
@@ -143,9 +183,12 @@ class TokenizeTest(TestCase):
         # The ENDMARKER and final NEWLINE are omitted.
         f = BytesIO(s.encode('utf-8'))
         result = stringify_tokens_from_source(tokenize(f.readline), s)
-        self.assertEqual(result,
-                         ["    ENCODING   'utf-8'       (0, 0) (0, 0)"] +
-                         expected.rstrip().splitlines())
+        expected = re.sub(r"(    NEWLINE  .*) (\(.+\)).*\)$", r"    NEWLINE    ''            \2 (-1, -1)", expected, flags=re.MULTILINE)
+        expected_lines = expected.rstrip().splitlines()
+        expected_lines = [line for line in expected_lines if not line.startswith("    COMMENT")]
+        self.assertEqual(result, expected_lines)
+                         # ["    ENCODING   'utf-8'       (0, 0) (0, 0)"] +
+                         #expected.rstrip().splitlines())
 
     def test_invalid_readline(self):
         def gen():

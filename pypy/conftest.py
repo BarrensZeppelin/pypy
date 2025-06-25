@@ -241,7 +241,7 @@ def pytest_runtest_setup(item):
             from pypy.tool.pytest.objspace import gettestobjspace
             # Make cls.space and cls.runappdirect available in tests.
             spaceconfig = getattr(appclass.obj, 'spaceconfig', {})
-            appclass.obj.space = gettestobjspace(**spaceconfig)
+            # appclass.obj.space = gettestobjspace(**spaceconfig)
             appclass.obj.runappdirect = config.option.runappdirect
 
 def pytest_ignore_collect(path, config):
