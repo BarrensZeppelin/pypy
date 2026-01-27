@@ -61,8 +61,7 @@ class TypeVar(_Immutable, _PickleUsingNameMixin):
 
     __slots__ = ('__name__', '__covariant__', '__contravariant__',
                  '__infer_variance__', '_bound', '_constraints',
-                 '__evaluate_bound__', '__evaluate_constraints__',
-                 '__module__')
+                 '__evaluate_bound__', '__evaluate_constraints__')
 
     def __init__(self, name, *constraints, bound=None, covariant=False,
                  contravariant=False, infer_variance=False):
@@ -93,7 +92,7 @@ class TypeVar(_Immutable, _PickleUsingNameMixin):
             self._constraints = constraints
 
         # Used for pickling
-        self.__module__ = _caller()
+        # __module__ is automatically set by Python to the defining module
 
     @property
     def __bound__(self):
@@ -162,7 +161,7 @@ class ParamSpec(_Immutable, _PickleUsingNameMixin):
     """
 
     __slots__ = ('__name__', '__covariant__', '__contravariant__',
-                 '__infer_variance__', '__module__', 'args', 'kwargs')
+                 '__infer_variance__', 'args', 'kwargs')
 
     def __init__(self, name, *, covariant=False, contravariant=False,
                  infer_variance=False):
@@ -170,7 +169,7 @@ class ParamSpec(_Immutable, _PickleUsingNameMixin):
         self.__covariant__ = covariant
         self.__contravariant__ = contravariant
         self.__infer_variance__ = infer_variance
-        self.__module__ = _caller()
+        # __module__ is automatically set by Python to the defining module
 
         # Create args and kwargs attributes
         self.args = _ParamSpecArgs(self)
@@ -270,11 +269,11 @@ class TypeVarTuple(_Immutable, _PickleUsingNameMixin):
     A TypeVarTuple is a placeholder for an *arbitrary* number of types.
     """
 
-    __slots__ = ('__name__', '__module__')
+    __slots__ = ('__name__',)
 
     def __init__(self, name):
         self.__name__ = name
-        self.__module__ = _caller()
+        # __module__ is automatically set by Python to the defining module
 
     def has_default(self):
         return False
@@ -309,8 +308,7 @@ class TypeAliasType:
         # and __value__ = tuple[float, float]
     """
 
-    __slots__ = ('_name', '_type_params', '_evaluate', '_value', '_evaluated',
-                 '__module__')
+    __slots__ = ('_name', '_type_params', '_evaluate', '_value', '_evaluated')
 
     def __init__(self, name, evaluate_func, *, type_params=()):
         """Initialize a TypeAliasType.
@@ -325,7 +323,7 @@ class TypeAliasType:
         self._evaluate = evaluate_func
         self._value = None
         self._evaluated = False
-        self.__module__ = _caller()
+        # __module__ is automatically set by Python to the defining module
 
     @property
     def __name__(self):

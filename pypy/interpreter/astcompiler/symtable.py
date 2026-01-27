@@ -26,6 +26,16 @@ SCOPE_CELL = 5
 SCOPE_CELL_CLASS = 6     # for "__class__" inside class bodies only
 
 
+class TypeParamsNode(object):
+    """A wrapper node for the type params scope key.
+
+    This is needed because type_alias.type_params is a list which isn't hashable.
+    We use this wrapper as the scope key for the TypeParamBlock scope.
+    """
+    def __init__(self, type_alias):
+        self.type_alias = type_alias
+
+
 class Scope(object):
 
     can_be_optimized = False
@@ -859,19 +869,34 @@ class SymtableBuilder(ast.GenericASTVisitor):
         assert isinstance(target, ast.Name)
         self.note_symbol(target.id, SYM_ASSIGNED)
 
-        # Create an annotation scope for the type parameters and value
-        new_scope = AnnotationScope(target.id, type_alias.lineno,
-                                    type_alias.col_offset)
-        self.push_scope(new_scope, type_alias)
-
-        # Visit type parameters (they become local to the annotation scope)
+        # Following CPython's design with two scopes:
+        # 1. TypeParamBlock for type params (if any)
+        # 2. TypeAliasBlock for the value expression
+        #
+        # We use a wrapper TypeParamsNode object as a hashable key for the params scope.
         if type_alias.type_params:
+            params_scope = AnnotationScope(target.id + ".<type_params>",
+                                           type_alias.lineno, type_alias.col_offset)
+            # Use a TypeParamsNode wrapper as the scope key
+            type_params_node = TypeParamsNode(type_alias)
+            type_alias._type_params_node = type_params_node  # Store for codegen to find
+            self.push_scope(params_scope, type_params_node)
+            # Visit type parameters (they become local to this scope)
             self._visit_type_params(type_alias.type_params)
+
+        # Create a scope for the value expression (TypeAliasBlock in CPython)
+        value_scope = AnnotationScope(target.id,
+                                      type_alias.lineno, type_alias.col_offset)
+        self.push_scope(value_scope, type_alias)
 
         # Visit the value expression
         type_alias.value.walkabout(self)
 
-        self.pop_scope()
+        self.pop_scope()  # Pop value scope
+
+        # Pop type params scope if we created one
+        if type_alias.type_params:
+            self.pop_scope()
 
     def visit_TypeVar(self, type_var):
         """Visit a TypeVar in a type parameter list."""
