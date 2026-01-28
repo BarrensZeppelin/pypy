@@ -4,15 +4,14 @@ Review of the PEP 695 (Type Parameter Syntax) implementation in PyPy.
 
 ## Summary
 
-The implementation provides working support for PEP 695 type parameter syntax including type aliases, generic functions, generic classes, TypeVar with bounds/constraints, ParamSpec, and TypeVarTuple. Basic tests pass.
+The implementation provides working support for PEP 695 type parameter syntax including type aliases, generic functions, generic classes, TypeVar with bounds/constraints, ParamSpec, and TypeVarTuple.
 
-**However, comparison with CPython PR #103764 revealed several issues:**
-- **Critical:** Duplicate TypeVar/ParamSpec/TypeVarTuple classes exist in both `typing.py` and `_pypy_typing.py` - they should be unified
-- **Critical:** `infer_variance` is not set to `True` for PEP 695 type parameters
-- **Medium:** Missing `__parameters__` property on TypeAliasType and missing methods on ParamSpec/TypeVarTuple
-- One known limitation (class namespace access) is documented with a test
+**All critical and medium issues identified by comparison with CPython PR #103764 have been resolved.** The implementation now:
+- Uses unified TypeVar/ParamSpec/TypeVarTuple/Generic classes imported into `typing.py` from `_pypy_typing.py`
+- Correctly sets `infer_variance=True` for PEP 695 type parameters
+- Implements all required helper methods (`__typing_subst__`, `__typing_prepare_subst__`, `__mro_entries__`, `__parameters__`)
 
-See "Issues Found" section below for full details.
+One known limitation (class namespace access) remains documented with a test.
 
 ---
 
@@ -47,13 +46,13 @@ This works correctly in CPython 3.12+, which uses a `__classdict__` cell and spe
 | Feature | CPython | PyPy |
 |---------|---------|------|
 | Type param creation | Intrinsic opcodes | Module imports + function calls |
-| TypeVar/ParamSpec/TypeVarTuple location | C module (`_typing`) | **Duplicated in typing.py AND _pypy_typing.py** |
+| TypeVar/ParamSpec/TypeVarTuple location | C module (`_typing`) | `_pypy_typing.py` (imported by `typing.py`) |
 | Class dict access | `__classdict__` cell + special opcodes | **Not implemented** |
 | Lazy evaluation | Closure functions | Closure functions |
 | `__type_params__` setting | `INTRINSIC_SET_FUNCTION_TYPE_PARAMS` | `STORE_ATTR` |
-| `infer_variance` for PEP 695 params | Always `True` | **Always `False`** |
+| `infer_variance` for PEP 695 params | Always `True` | Always `True` |
 
-PyPy's approach of using module imports (`from _pypy_typing import ...`) rather than intrinsic opcodes is a valid design choice. However, the duplicate class definitions and missing `infer_variance` handling are significant issues that need to be addressed.
+PyPy's approach of using module imports (`from _pypy_typing import ...`) rather than intrinsic opcodes is a valid design choice that mirrors how CPython's `typing.py` imports from the C `_typing` module.
 
 ---
 
@@ -70,6 +69,8 @@ PyPy's approach of using module imports (`from _pypy_typing import ...`) rather 
 5. **`__type_params__` attribute** - Properly implemented on both functions and classes with correct getter/setter behavior.
 
 6. **Forward references** - Type alias values support forward references due to lazy evaluation.
+
+7. **Unified type classes** - `typing.py` imports TypeVar, ParamSpec, TypeVarTuple, TypeAliasType, and Generic from `_pypy_typing.py`, ensuring type introspection works correctly.
 
 ---
 
@@ -98,7 +99,8 @@ The test suite (`apptest_pep695.py`) covers:
 |------|---------|
 | `pypy/interpreter/astcompiler/codegen.py` | Type param code generators |
 | `pypy/interpreter/astcompiler/symtable.py` | Annotation scope, type param visitors |
-| `lib_pypy/_pypy_typing.py` | TypeVar, ParamSpec, TypeVarTuple, TypeAliasType |
+| `lib_pypy/_pypy_typing.py` | TypeVar, ParamSpec, TypeVarTuple, TypeAliasType, Generic |
+| `lib-python/3/typing.py` | Import from `_pypy_typing`, helper functions |
 | `pypy/interpreter/function.py` | `__type_params__` on functions |
 | `pypy/objspace/std/typeobject.py` | `__type_params__` on types |
 | `pypy/interpreter/typedef.py` | Function typedef |
@@ -106,174 +108,88 @@ The test suite (`apptest_pep695.py`) covers:
 
 ---
 
-## Issues Found (Comparison with CPython PR #103764)
+## Issues Resolved (Comparison with CPython PR #103764)
 
-The following issues were identified by comparing the PyPy implementation with CPython's PEP 695 implementation (PR #103764 and CPython 3.12.12 source).
+The following issues were identified and **resolved** by comparing the PyPy implementation with CPython's PEP 695 implementation (PR #103764 and CPython 3.12 source).
 
-### Critical: Duplicate TypeVar/ParamSpec/TypeVarTuple Classes
+### ✅ Critical: Duplicate TypeVar/ParamSpec/TypeVarTuple Classes
 
-**Severity: Critical**
+**Status: RESOLVED**
 
-PyPy has two separate implementations of TypeVar, ParamSpec, and TypeVarTuple:
-
-1. `lib-python/3/typing.py` - Old Python implementations (lines 995, 1063, 1190)
-2. `lib_pypy/_pypy_typing.py` - New implementations with PEP 695 support
-
-**CPython's approach:** In CPython 3.12+, these classes are implemented in C (`Objects/typevarobject.c`) and `typing.py` imports them from the `_typing` module. The old Python implementations were deleted.
-
-**PyPy's problem:** `typing.py` does NOT import from `_pypy_typing`, so:
-
-```python
-from typing import TypeVar as TypingTypeVar
-
-def foo[T](x: T) -> T:  # T is a _pypy_typing.TypeVar
-    return x
-
-# This fails:
-isinstance(foo.__type_params__[0], TypingTypeVar)  # False!
-```
-
-**Impact:**
-- Type introspection breaks - `isinstance(x, typing.TypeVar)` fails for PEP 695 TypeVars
-- typing module internals don't recognize PEP 695 type params
-- Third-party tools (mypy, pyright runtime helpers) may break
-
-**Fix:** Modify `lib-python/3/typing.py` to import from `_pypy_typing` and delete the duplicate class definitions:
-```python
-from _pypy_typing import (
-    TypeVar,
-    ParamSpec,
-    TypeVarTuple,
-    ParamSpecArgs,
-    ParamSpecKwargs,
-    TypeAliasType,
-)
-```
+`typing.py` now imports TypeVar, ParamSpec, TypeVarTuple, ParamSpecArgs, ParamSpecKwargs, TypeAliasType, and Generic from `_pypy_typing.py`. The old Python implementations in `typing.py` were removed.
 
 ---
 
-### Critical: `infer_variance` Not Set for PEP 695 Type Parameters
+### ✅ Critical: `infer_variance` Not Set for PEP 695 Type Parameters
 
-**Severity: Critical**
+**Status: RESOLVED**
 
-**Location:** `pypy/interpreter/astcompiler/codegen.py` lines 2735-2790, `lib_pypy/_pypy_typing.py` lines 381-418
-
-When creating TypeVars and ParamSpecs via PEP 695 syntax (`def foo[T](x: T)`), they should have `infer_variance=True`.
-
-- **CPython** (`Objects/typevarobject.c:1245-1246`): `_Py_make_typevar` **always** sets `infer_variance=true`
-- **PyPy**: `_make_typevar` defaults `infer_variance=False`, and `codegen.py` never passes `infer_variance=True`
-
-**Impact:**
-- TypeVars show `~T` in repr instead of just `T`
-- Type checkers won't correctly infer variance
-
-**CPython test that would fail:**
-```python
-def func1[A: str]():
-    return A
-
-a = func1()
-assert a.__infer_variance__ == True  # Fails in PyPy
-```
-
-**Fix:** Modify codegen to pass `infer_variance=True` when calling `_make_typevar`, `_make_typevar_with_bound`, `_make_typevar_with_constraints`, and `_make_paramspec`.
+The factory functions (`_make_typevar`, `_make_typevar_with_bound`, `_make_typevar_with_constraints`, `_make_paramspec`) now set `infer_variance=True` for PEP 695 type parameters. TypeVars created with PEP 695 syntax now correctly show `T` in repr instead of `~T`.
 
 ---
 
-### Medium: TypeAliasType Missing `__parameters__` Property
+### ✅ Medium: TypeAliasType Missing `__parameters__` Property
 
-**Severity: Medium**
+**Status: RESOLVED**
 
-**Location:** `lib_pypy/_pypy_typing.py` lines 298-375
-
-CPython's `TypeAliasType` has a `__parameters__` property (`Objects/typevarobject.c:1312-1319`) that returns the type parameters with TypeVarTuples unpacked. PyPy's implementation is missing this property.
-
-**CPython test that would fail:**
-```python
-type TA1 = int
-assert TA1.__parameters__ == ()  # AttributeError in PyPy
-
-type Generic[T, *Ts] = tuple[T, *Ts]
-assert len(Generic.__parameters__) == 2  # AttributeError in PyPy
-```
+TypeAliasType now has a `__parameters__` property that returns the type parameters with TypeVarTuples unpacked.
 
 ---
 
-### Medium: TypeVarTuple Missing `__typing_subst__` and `__typing_prepare_subst__`
+### ✅ Medium: TypeVarTuple Missing `__typing_subst__` and `__typing_prepare_subst__`
 
-**Severity: Medium**
+**Status: RESOLVED**
 
-**Location:** `lib_pypy/_pypy_typing.py` TypeVarTuple class
-
-CPython implements:
+TypeVarTuple now implements:
 - `__typing_subst__`: raises `TypeError("Substitution of bare TypeVarTuple is not supported")`
 - `__typing_prepare_subst__`: calls `typing._typevartuple_prepare_subst`
 
-PyPy's TypeVarTuple is missing both methods.
+---
+
+### ✅ Medium: ParamSpec Missing `__typing_prepare_subst__`
+
+**Status: RESOLVED**
+
+ParamSpec now implements `__typing_prepare_subst__` which calls `typing._paramspec_prepare_subst`.
 
 ---
 
-### Medium: ParamSpec Missing `__typing_prepare_subst__`
+### ✅ Low: TypeAliasType Allows Subscripting Non-Generic Aliases
 
-**Severity: Medium**
+**Status: RESOLVED**
 
-**Location:** `lib_pypy/_pypy_typing.py` ParamSpec class
-
-CPython's ParamSpec (`Objects/typevarobject.c:902-917`) implements `__typing_prepare_subst__` which calls `typing._paramspec_prepare_subst`. PyPy doesn't have this method.
+TypeAliasType now raises `TypeError("Only generic type aliases are subscriptable")` when attempting to subscript a non-generic type alias.
 
 ---
 
-### Low: TypeAliasType Allows Subscripting Non-Generic Aliases
+### ✅ Low: Missing `__mro_entries__` Methods
 
-**Severity: Low**
+**Status: RESOLVED**
 
-**Location:** `lib_pypy/_pypy_typing.py` lines 356-361
-
-CPython (`Objects/typevarobject.c:1416-1425`) raises `TypeError` when subscripting a non-generic type alias:
-
-```python
-type NonGeneric = int
-NonGeneric[int]  # CPython: TypeError: Only generic type aliases are subscriptable
-                 # PyPy: Returns a _GenericAlias (no error)
-```
+TypeVar, ParamSpec, TypeVarTuple, and TypeAliasType now implement `__mro_entries__` to raise appropriate `TypeError` when used as a base class.
 
 ---
 
-### Low: Missing `__mro_entries__` Methods
+### ✅ Low: TypeVar.__typing_subst__ Behavior Differs
 
-**Severity: Low**
+**Status: RESOLVED**
 
-**Location:** `lib_pypy/_pypy_typing.py`
-
-CPython's TypeVar, ParamSpec, and TypeVarTuple implement `__mro_entries__` to raise `TypeError("Cannot subclass an instance of TypeVar")` when used as a base class. PyPy doesn't implement these methods.
-
----
-
-### Low: TypeVar.__typing_subst__ Behavior Differs
-
-**Severity: Low**
-
-**Location:** `lib_pypy/_pypy_typing.py` line 143-145
-
-- **CPython** (`Objects/typevarobject.c:410-416`): calls `typing._typevar_subst(self, arg)`
-- **PyPy**: simply returns `arg`
-
-This may affect generic type substitution behavior in edge cases.
+TypeVar now calls `typing._typevar_subst(self, arg)` matching CPython's behavior.
 
 ---
 
 ## Summary of Issues
 
-| Issue | Severity | Files Affected |
-|-------|----------|----------------|
-| Duplicate TypeVar/ParamSpec/TypeVarTuple classes | **Critical** | lib-python/3/typing.py, lib_pypy/_pypy_typing.py |
-| `infer_variance` not set | **Critical** | codegen.py, _pypy_typing.py |
-| Missing `__parameters__` | Medium | _pypy_typing.py |
-| Missing TypeVarTuple methods | Medium | _pypy_typing.py |
-| Missing ParamSpec method | Medium | _pypy_typing.py |
-| Non-generic subscript allowed | Low | _pypy_typing.py |
-| Missing `__mro_entries__` | Low | _pypy_typing.py |
-| TypeVar.__typing_subst__ | Low | _pypy_typing.py |
+| Issue | Severity | Status |
+|-------|----------|--------|
+| Duplicate TypeVar/ParamSpec/TypeVarTuple classes | Critical | ✅ Resolved |
+| `infer_variance` not set | Critical | ✅ Resolved |
+| Missing `__parameters__` | Medium | ✅ Resolved |
+| Missing TypeVarTuple methods | Medium | ✅ Resolved |
+| Missing ParamSpec method | Medium | ✅ Resolved |
+| Non-generic subscript allowed | Low | ✅ Resolved |
+| Missing `__mro_entries__` | Low | ✅ Resolved |
+| TypeVar.__typing_subst__ | Low | ✅ Resolved |
 
 ---
 
