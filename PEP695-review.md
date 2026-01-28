@@ -4,40 +4,13 @@ Review of the PEP 695 (Type Parameter Syntax) implementation in PyPy.
 
 ## Summary
 
-The implementation provides working support for PEP 695 type parameter syntax including type aliases, generic functions, generic classes, TypeVar with bounds/constraints, ParamSpec, and TypeVarTuple.
+The implementation provides **complete** support for PEP 695 type parameter syntax including type aliases, generic functions, generic classes, TypeVar with bounds/constraints, ParamSpec, and TypeVarTuple.
 
-**All critical and medium issues identified by comparison with CPython PR #103764 have been resolved.** The implementation now:
+**All issues identified by comparison with CPython PR #103764 have been resolved.** The implementation now:
 - Uses unified TypeVar/ParamSpec/TypeVarTuple/Generic classes imported into `typing.py` from `_pypy_typing.py`
 - Correctly sets `infer_variance=True` for PEP 695 type parameters
 - Implements all required helper methods (`__typing_subst__`, `__typing_prepare_subst__`, `__mro_entries__`, `__parameters__`)
-
-One known limitation (class namespace access) remains documented with a test.
-
----
-
-## Known Limitation
-
-### Class Namespace Access from Annotation Scopes Not Supported
-
-**Severity: Medium** (documented with test)
-
-Type parameter bounds and type alias values cannot access names defined in an enclosing class scope:
-
-```python
-class Outer:
-    BaseType = int
-    type Alias[T: BaseType] = list[T]  # NameError when accessing T.__bound__
-```
-
-This works correctly in CPython 3.12+, which uses a `__classdict__` cell and special `LOAD_CLASSDICT_OR_*` opcodes to allow annotation scopes to access the class namespace during class body execution.
-
-**Affected files:**
-- `pypy/interpreter/astcompiler/codegen.py`
-- `pypy/interpreter/astcompiler/symtable.py`
-
-**To fix:** Would require implementing a mechanism similar to CPython's `__classdict__` cell that gets populated during class body execution and is accessible from nested annotation scopes.
-
-**Test:** `test_class_namespace_access_from_annotation_scope` documents this behavior.
+- **Supports class namespace access from annotation scopes via `__classdict__` mechanism**
 
 ---
 
@@ -47,7 +20,7 @@ This works correctly in CPython 3.12+, which uses a `__classdict__` cell and spe
 |---------|---------|------|
 | Type param creation | Intrinsic opcodes | Module imports + function calls |
 | TypeVar/ParamSpec/TypeVarTuple location | C module (`_typing`) | `_pypy_typing.py` (imported by `typing.py`) |
-| Class dict access | `__classdict__` cell + special opcodes | **Not implemented** |
+| Class dict access | `__classdict__` cell + special opcodes | `__classdict__` cell + `LOAD_FROM_DICT_OR_*` opcodes |
 | Lazy evaluation | Closure functions | Closure functions |
 | `__type_params__` setting | `INTRINSIC_SET_FUNCTION_TYPE_PARAMS` | `STORE_ATTR` |
 | `infer_variance` for PEP 695 params | Always `True` | Always `True` |
@@ -89,7 +62,7 @@ The test suite (`apptest_pep695.py`) covers:
 - Generic methods inside generic classes
 - Forward references in type aliases
 - Nested generic classes
-- Class namespace access limitation (expected failure)
+- Class namespace access from annotation scopes (via `__classdict__`)
 
 ---
 
@@ -97,8 +70,9 @@ The test suite (`apptest_pep695.py`) covers:
 
 | File | Changes |
 |------|---------|
-| `pypy/interpreter/astcompiler/codegen.py` | Type param code generators |
-| `pypy/interpreter/astcompiler/symtable.py` | Annotation scope, type param visitors |
+| `pypy/interpreter/astcompiler/codegen.py` | Type param code generators, `__classdict__` lookups |
+| `pypy/interpreter/astcompiler/symtable.py` | Annotation scope, type param visitors, `__classdict__` tracking |
+| `pypy/interpreter/astcompiler/assemble.py` | Stack effects for `LOAD_FROM_DICT_OR_*` opcodes |
 | `lib_pypy/_pypy_typing.py` | TypeVar, ParamSpec, TypeVarTuple, TypeAliasType, Generic |
 | `lib-python/3/typing.py` | Import from `_pypy_typing`, helper functions |
 | `pypy/interpreter/function.py` | `__type_params__` on functions |
@@ -193,6 +167,6 @@ TypeVar now calls `typing._typevar_subst(self, arg)` matching CPython's behavior
 
 ---
 
-## Future Work
+## Completion Status
 
-1. **Implement class namespace access for annotation scopes** - This is the only remaining functional gap compared to CPython 3.12+.
+The PEP 695 implementation is **feature-complete** and matches CPython 3.12+ behavior. All major functionality is implemented including class namespace access from annotation scopes.
